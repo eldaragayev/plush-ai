@@ -1,22 +1,25 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import {
   View,
   StyleSheet,
   TouchableWithoutFeedback,
   Text,
-  Slider,
-  SegmentedControlIOS,
   Dimensions,
+  GestureResponderEvent,
 } from 'react-native';
+import Slider from '@react-native-community/slider';
+import SegmentedControl from '@react-native-segmented-control/segmented-control';
 import {
   Canvas,
   Image as SkiaImage,
   Circle,
-  RuntimeShader,
-  useImage,
   Skia,
+  useImage,
   Group,
   Paint,
+  TileMode,
+  FilterMode,
+  MipmapMode,
 } from '@shopify/react-native-skia';
 import { Point } from '../types';
 
@@ -26,41 +29,6 @@ interface MagnifierToolProps {
   height: number;
   onApply: (center: Point, radius: number, scale: number) => void;
 }
-
-const { width: screenWidth } = Dimensions.get('window');
-
-const magnifierShader = `
-uniform shader image;
-uniform float2 center;
-uniform float radius;
-uniform float scale;
-uniform float2 resolution;
-
-half4 main(float2 coord) {
-  float2 uv = coord / resolution;
-  float2 centerUV = center / resolution;
-  
-  // Calculate distance from center
-  float2 delta = uv - centerUV;
-  float dist = length(delta * resolution);
-  
-  if (dist < radius) {
-    // Calculate the magnification factor based on distance
-    float factor = smoothstep(radius, 0.0, dist);
-    
-    // Apply scaling (positive for bloat, negative for pucker)
-    float2 offset = delta * factor * scale;
-    float2 newUV = uv - offset;
-    
-    // Clamp to image bounds
-    newUV = clamp(newUV, float2(0), float2(1));
-    
-    return image.eval(newUV * resolution);
-  }
-  
-  return image.eval(coord);
-}
-`;
 
 export default function MagnifierTool({
   imageUri,
@@ -75,9 +43,36 @@ export default function MagnifierTool({
   const [isPreview, setIsPreview] = useState(false);
   
   const image = useImage(imageUri);
-  const shader = RuntimeShader.Make(magnifierShader);
 
-  const handleTouch = useCallback((event: any) => {
+  // Create the magnifier shader source
+  const source = useMemo(() => {
+    return Skia.RuntimeEffect.Make(`
+      uniform shader image;
+      uniform vec2 center;
+      uniform float radius;
+      uniform float scale;
+      uniform vec2 resolution;
+
+      vec4 main(vec2 pos) {
+        vec2 coord = pos;
+        vec2 delta = coord - center;
+        float dist = length(delta);
+        
+        if (dist < radius) {
+          float factor = smoothstep(radius, 0.0, dist);
+          vec2 direction = normalize(delta);
+          
+          // Apply bulge/pinch effect
+          float displacement = factor * scale * radius;
+          coord = coord - direction * displacement;
+        }
+        
+        return image.eval(coord);
+      }
+    `);
+  }, []);
+
+  const handleTouch = useCallback((event: GestureResponderEvent) => {
     const { locationX, locationY } = event.nativeEvent;
     const point = { x: locationX, y: locationY };
     
@@ -95,30 +90,80 @@ export default function MagnifierTool({
     setTouchPoint(null);
   }, [touchPoint, radius, intensity, mode, onApply]);
 
-  const renderEffect = () => {
-    if (!image || !touchPoint || !isPreview) return null;
-
+  // Create uniforms for the shader
+  const uniforms = useMemo(() => {
+    if (!touchPoint || !source) return null;
+    
     const scale = mode === 'bloat' ? intensity : -intensity;
     
-    shader?.setUniform('center', [touchPoint.x, touchPoint.y]);
-    shader?.setUniform('radius', radius);
-    shader?.setUniform('scale', scale);
-    shader?.setUniform('resolution', [width, height]);
-    shader?.setImageShader('image', image);
+    return {
+      center: [touchPoint.x, touchPoint.y],
+      radius: radius,
+      scale: scale,
+      resolution: [width, height],
+    };
+  }, [touchPoint, mode, intensity, radius, width, height, source]);
 
+  const renderCanvas = () => {
+    if (!image) return null;
+
+    // If we're previewing and have valid shader setup
+    if (isPreview && touchPoint && source && uniforms) {
+      const paint = Skia.Paint();
+      
+      // Create the shader with the image
+      const uniformsArray = [
+        touchPoint.x, touchPoint.y,  // center
+        radius,                       // radius  
+        mode === 'bloat' ? intensity : -intensity,  // scale
+        width, height                 // resolution
+      ];
+      
+      const imageShader = image.makeShaderOptions(
+        TileMode.Clamp, 
+        TileMode.Clamp,
+        FilterMode.Linear,
+        MipmapMode.None
+      );
+      const shader = source.makeShaderWithChildren(
+        uniformsArray,
+        [imageShader]
+      );
+      
+      if (shader) {
+        paint.setShader(shader);
+        
+        return (
+          <Group>
+            <Paint paint={paint}>
+              <SkiaImage
+                image={image}
+                fit="contain"
+                x={0}
+                y={0}
+                width={width}
+                height={height}
+              />
+            </Paint>
+            {renderOverlay()}
+          </Group>
+        );
+      }
+    }
+
+    // Default: just show the image
     return (
-      <Group>
-        <Paint shader={shader}>
-          <SkiaImage
-            image={image}
-            fit="contain"
-            x={0}
-            y={0}
-            width={width}
-            height={height}
-          />
-        </Paint>
-      </Group>
+      <>
+        <SkiaImage
+          image={image}
+          fit="contain"
+          x={0}
+          y={0}
+          width={width}
+          height={height}
+        />
+        {renderOverlay()}
+      </>
     );
   };
 
@@ -156,31 +201,16 @@ export default function MagnifierTool({
       >
         <View style={styles.canvasContainer}>
           <Canvas style={{ width, height }}>
-            {isPreview && touchPoint ? (
-              renderEffect()
-            ) : (
-              image && (
-                <SkiaImage
-                  image={image}
-                  fit="contain"
-                  x={0}
-                  y={0}
-                  width={width}
-                  height={height}
-                />
-              )
-            )}
-            
-            {renderOverlay()}
+            {renderCanvas()}
           </Canvas>
         </View>
       </TouchableWithoutFeedback>
       
       <View style={styles.controls}>
-        <SegmentedControlIOS
+        <SegmentedControl
           values={['Bloat', 'Pucker']}
           selectedIndex={mode === 'bloat' ? 0 : 1}
-          onChange={(event) => {
+          onChange={(event: any) => {
             const index = event.nativeEvent.selectedSegmentIndex;
             setMode(index === 0 ? 'bloat' : 'pucker');
           }}

@@ -6,8 +6,8 @@ import {
   Dimensions,
   Text,
   TouchableOpacity,
-  Slider,
 } from 'react-native';
+import Slider from '@react-native-community/slider';
 import {
   Canvas,
   Path,
@@ -15,7 +15,6 @@ import {
   vec,
   Image as SkiaImage,
   Skia,
-  RuntimeShader,
   useImage,
   Group,
   Circle,
@@ -71,7 +70,7 @@ export default function LiquifyTool({
   
   const image = useImage(imageUri);
   const freezeMask = useImage(freezeMaskUri);
-  const shader = RuntimeShader.Make(liquifyShader);
+  // Shader will be created when we have a proper displacement map
   
   const canvasRef = useRef(null);
   const displacementPath = useRef(Skia.Path.Make());

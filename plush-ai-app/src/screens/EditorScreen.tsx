@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -16,10 +16,13 @@ import { StackNavigationProp } from '@react-navigation/stack';
 import { Canvas, useImage, Image as SkiaImage } from '@shopify/react-native-skia';
 import * as Haptics from 'expo-haptics';
 import { RootStackParamList } from '../navigation/AppNavigator';
-import { EditSession, Tool, Operation, ToolConfig } from '../types';
+import { EditSession, Tool, Operation, ToolConfig, Point, Stroke } from '../types';
 import { SessionStorageService } from '../services/sessionStorage';
 import { ImageUtils } from '../utils/imageUtils';
+import { OperationStackManager } from '../services/operationStack';
 import { TOOLS } from '../constants';
+import LiquifyTool from '../components/LiquifyTool';
+import MagnifierTool from '../components/MagnifierTool';
 
 type EditorScreenNavigationProp = StackNavigationProp<RootStackParamList, 'Editor'>;
 type EditorScreenRouteProp = RouteProp<RootStackParamList, 'Editor'>;
@@ -35,11 +38,8 @@ export default function EditorScreen() {
   const [loading, setLoading] = useState(true);
   const [selectedTool, setSelectedTool] = useState<Tool | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [showBeforeAfter, setShowBeforeAfter] = useState(false);
-  const [canUndo, setCanUndo] = useState(false);
-  const [canRedo, setCanRedo] = useState(false);
-  const [undoStack, setUndoStack] = useState<Operation[][]>([]);
-  const [redoStack, setRedoStack] = useState<Operation[][]>([]);
+  const [operationStack, setOperationStack] = useState<OperationStackManager | null>(null);
+  const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
 
   const image = useImage(session?.sourceUri || '');
 
@@ -75,7 +75,22 @@ export default function EditorScreen() {
       }
 
       setSession(currentSession);
-      setCanUndo(currentSession.ops.length > 0);
+      
+      // Initialize operation stack
+      const stack = new OperationStackManager(currentSession.ops);
+      stack.onChange((ops) => {
+        setSession(prev => prev ? { ...prev, ops } : null);
+      });
+      setOperationStack(stack);
+
+      // Calculate canvas size to fit screen
+      const size = ImageUtils.calculateAspectRatioFit(
+        currentSession.width,
+        currentSession.height,
+        screenWidth,
+        screenHeight - 250
+      );
+      setCanvasSize(size);
     } catch (error) {
       console.error('Failed to initialize editor:', error);
       Alert.alert('Error', 'Failed to load image. Please try again.');
@@ -128,46 +143,99 @@ export default function EditorScreen() {
   };
 
   const handleToolSelect = (tool: Tool) => {
-    setSelectedTool(tool);
+    setSelectedTool(selectedTool === tool ? null : tool);
     if (Platform.OS === 'ios') {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     }
   };
 
   const handleUndo = () => {
-    if (!session || session.ops.length === 0) return;
-
-    const newOps = [...session.ops];
-    const lastOp = newOps.pop();
-    
-    if (lastOp) {
-      setRedoStack([...redoStack, [lastOp]]);
-      setSession({ ...session, ops: newOps });
-      setCanUndo(newOps.length > 0);
-      setCanRedo(true);
-    }
+    if (!operationStack) return;
+    operationStack.undo();
   };
 
   const handleRedo = () => {
-    if (redoStack.length === 0 || !session) return;
-
-    const newRedoStack = [...redoStack];
-    const opsToRedo = newRedoStack.pop();
-    
-    if (opsToRedo) {
-      const newOps = [...session.ops, ...opsToRedo];
-      setSession({ ...session, ops: newOps });
-      setRedoStack(newRedoStack);
-      setCanUndo(true);
-      setCanRedo(newRedoStack.length > 0);
-    }
+    if (!operationStack) return;
+    operationStack.redo();
   };
 
   const handleResetTool = () => {
-    if (!selectedTool) return;
+    if (!selectedTool || !operationStack) return;
+    
+    // Reset operations for current tool
+    if (selectedTool === 'liquify') {
+      operationStack.resetTool('liquify');
+    } else if (selectedTool === 'magnifier') {
+      operationStack.resetTool('magnifier');
+    }
     
     if (Platform.OS === 'ios') {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    }
+  };
+
+  const handleLiquifyStroke = useCallback((stroke: Stroke) => {
+    if (!operationStack) return;
+    
+    operationStack.addOperation({
+      type: 'liquify',
+      strokes: [stroke],
+    });
+  }, [operationStack]);
+
+  const handleMagnifierApply = useCallback((center: Point, radius: number, scale: number) => {
+    if (!operationStack) return;
+    
+    operationStack.addOperation({
+      type: 'magnifier',
+      center,
+      radius,
+      scale,
+    });
+  }, [operationStack]);
+
+  const renderTool = () => {
+    if (!session || !image) return null;
+
+    switch (selectedTool) {
+      case 'liquify':
+        return (
+          <LiquifyTool
+            imageUri={session.sourceUri}
+            width={canvasSize.width}
+            height={canvasSize.height}
+            onStrokeEnd={handleLiquifyStroke}
+          />
+        );
+      
+      case 'magnifier':
+        return (
+          <MagnifierTool
+            imageUri={session.sourceUri}
+            width={canvasSize.width}
+            height={canvasSize.height}
+            onApply={handleMagnifierApply}
+          />
+        );
+      
+      default:
+        // Default canvas view
+        return (
+          <View style={styles.canvasContainer}>
+            <Canvas style={{ width: canvasSize.width, height: canvasSize.height }}>
+              {image && (
+                <SkiaImage
+                  image={image}
+                  fit="contain"
+                  x={0}
+                  y={0}
+                  width={canvasSize.width}
+                  height={canvasSize.height}
+                />
+              )}
+            </Canvas>
+          </View>
+        );
     }
   };
 
@@ -205,12 +273,8 @@ export default function EditorScreen() {
     return null;
   }
 
-  const canvasSize = ImageUtils.calculateAspectRatioFit(
-    session.width,
-    session.height,
-    screenWidth,
-    screenHeight - 250
-  );
+  const canUndo = operationStack?.canUndo() || false;
+  const canRedo = operationStack?.canRedo() || false;
 
   return (
     <SafeAreaView style={styles.container}>
@@ -233,57 +297,55 @@ export default function EditorScreen() {
         </TouchableOpacity>
       </View>
 
-      <View style={styles.canvasContainer}>
-        <Canvas style={{ width: canvasSize.width, height: canvasSize.height }}>
-          {image && (
-            <SkiaImage
-              image={image}
-              fit="contain"
-              x={0}
-              y={0}
-              width={canvasSize.width}
-              height={canvasSize.height}
-            />
-          )}
-        </Canvas>
-      </View>
+      {renderTool()}
 
-      <View style={styles.controls}>
-        <View style={styles.controlButtons}>
-          <TouchableOpacity
-            onPress={handleUndo}
-            disabled={!canUndo}
-            style={[styles.controlButton, !canUndo && styles.controlButtonDisabled]}
+      {!selectedTool && (
+        <View style={styles.controls}>
+          <View style={styles.controlButtons}>
+            <TouchableOpacity
+              onPress={handleUndo}
+              disabled={!canUndo}
+              style={[styles.controlButton, !canUndo && styles.controlButtonDisabled]}
+            >
+              <Text style={styles.controlButtonText}>Undo</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              onPress={handleRedo}
+              disabled={!canRedo}
+              style={[styles.controlButton, !canRedo && styles.controlButtonDisabled]}
+            >
+              <Text style={styles.controlButtonText}>Redo</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              onPress={handleResetTool}
+              disabled={!selectedTool}
+              style={[styles.controlButton, !selectedTool && styles.controlButtonDisabled]}
+            >
+              <Text style={styles.controlButtonText}>Reset</Text>
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.toolTray}
+            contentContainerStyle={styles.toolTrayContent}
           >
-            <Text style={styles.controlButtonText}>Undo</Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity
-            onPress={handleRedo}
-            disabled={!canRedo}
-            style={[styles.controlButton, !canRedo && styles.controlButtonDisabled]}
-          >
-            <Text style={styles.controlButtonText}>Redo</Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity
-            onPress={handleResetTool}
-            disabled={!selectedTool}
-            style={[styles.controlButton, !selectedTool && styles.controlButtonDisabled]}
-          >
-            <Text style={styles.controlButtonText}>Reset</Text>
-          </TouchableOpacity>
+            {TOOLS.map(renderToolButton)}
+          </ScrollView>
         </View>
+      )}
 
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={styles.toolTray}
-          contentContainerStyle={styles.toolTrayContent}
+      {selectedTool && (
+        <TouchableOpacity
+          style={styles.closeTool}
+          onPress={() => setSelectedTool(null)}
         >
-          {TOOLS.map(renderToolButton)}
-        </ScrollView>
-      </View>
+          <Text style={styles.closeToolText}>Done</Text>
+        </TouchableOpacity>
+      )}
     </SafeAreaView>
   );
 }
@@ -379,5 +441,19 @@ const styles = StyleSheet.create({
   },
   toolLabelActive: {
     color: '#007AFF',
+  },
+  closeTool: {
+    position: 'absolute',
+    top: 60,
+    right: 16,
+    backgroundColor: '#007AFF',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 20,
+  },
+  closeToolText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
   },
 });
