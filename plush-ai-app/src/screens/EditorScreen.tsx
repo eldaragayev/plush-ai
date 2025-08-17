@@ -23,6 +23,7 @@ import { OperationStackManager } from '../services/operationStack';
 import { TOOLS } from '../constants';
 import LiquifyTool from '../components/LiquifyTool';
 import MagnifierTool from '../components/MagnifierTool';
+import MagnifierToolGL from '../components/MagnifierToolGL';
 
 type EditorScreenNavigationProp = StackNavigationProp<RootStackParamList, 'Editor'>;
 type EditorScreenRouteProp = RouteProp<RootStackParamList, 'Editor'>;
@@ -210,7 +211,7 @@ export default function EditorScreen() {
       
       case 'magnifier':
         return (
-          <MagnifierTool
+          <MagnifierToolGL
             imageUri={session.sourceUri}
             width={canvasSize.width}
             height={canvasSize.height}

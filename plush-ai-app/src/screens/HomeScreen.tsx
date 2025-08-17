@@ -82,7 +82,7 @@ export default function HomeScreen() {
     }
 
     const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: [ImagePicker.MediaType.images],
       allowsEditing: false,
       quality: 1,
       exif: true,
@@ -106,7 +106,7 @@ export default function HomeScreen() {
     }
 
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: [ImagePicker.MediaType.images],
       allowsEditing: false,
       quality: 1,
       exif: true,

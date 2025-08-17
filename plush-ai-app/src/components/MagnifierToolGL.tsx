@@ -3,50 +3,83 @@ import {
   View,
   StyleSheet,
   Text,
-  Dimensions,
   PanResponder,
 } from 'react-native';
 import Slider from '@react-native-community/slider';
-import {
-  Canvas,
-  Image as SkiaImage,
-  Circle,
-  Skia,
-  useImage,
-  Group,
-} from '@shopify/react-native-skia';
+import { Shaders, Node, GLSL } from 'gl-react';
+import { Surface } from 'gl-react-expo';
+import GLImage from 'gl-react-image';
 import { Point } from '../types';
 
-interface MagnifierToolProps {
+const shaders = Shaders.create({
+  bulge: {
+    frag: GLSL`
+precision highp float;
+varying vec2 uv;
+
+uniform sampler2D image;
+uniform vec2 center;
+uniform float radius;
+uniform float strength;
+uniform vec2 resolution;
+
+void main() {
+  vec2 coord = uv * resolution;
+  vec2 toCenter = center - coord;
+  float distance = length(toCenter);
+  
+  if (distance < radius) {
+    float percent = distance / radius;
+    float amount = 0.0;
+    
+    if (strength > 0.0) {
+      // Bulge effect
+      amount = 1.0 - percent;
+      amount = amount * amount;
+      amount = amount * strength;
+    } else {
+      // Pinch effect
+      amount = percent;
+      amount = 1.0 - amount * amount;
+      amount = amount * abs(strength);
+      amount = -amount;
+    }
+    
+    coord = coord - toCenter * amount;
+  }
+  
+  gl_FragColor = texture2D(image, coord / resolution);
+}
+`
+  }
+});
+
+interface MagnifierToolGLProps {
   imageUri: string;
   width: number;
   height: number;
   onApply: (center: Point, radius: number, scale: number) => void;
 }
 
-export default function MagnifierTool({
+export default function MagnifierToolGL({
   imageUri,
   width,
   height,
   onApply,
-}: MagnifierToolProps) {
-  // Circle position - starts in center of screen
+}: MagnifierToolGLProps) {
   const [circlePosition, setCirclePosition] = useState<Point>({
     x: width / 2,
     y: height / 2,
   });
   
   const [radius, setRadius] = useState(80);
-  const [intensity, setIntensity] = useState(0); // Start at 0 (no effect)
+  const [intensity, setIntensity] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
   
-  const image = useImage(imageUri);
-
   // Create PanResponder for dragging the circle
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: (evt) => {
-        // Check if touch is within the circle
         const dx = evt.nativeEvent.locationX - circlePosition.x;
         const dy = evt.nativeEvent.locationY - circlePosition.y;
         const distance = Math.sqrt(dx * dx + dy * dy);
@@ -72,105 +105,55 @@ export default function MagnifierTool({
     })
   ).current;
 
-  // Handle intensity change with real-time preview
   const handleIntensityChange = useCallback((value: number) => {
     setIntensity(value);
   }, []);
 
-  // Apply effect when user stops dragging the slider
   const handleIntensityChangeEnd = useCallback((value: number) => {
     if (Math.abs(value) > 0.01) {
       onApply(circlePosition, radius, value);
     }
   }, [circlePosition, radius, onApply]);
 
-  // Handle radius change
   const handleRadiusChange = useCallback((value: number) => {
     setRadius(value);
   }, []);
 
-  // Render the overlay circle
-  const renderOverlay = () => {
-    return (
-      <Group>
-        {/* Border circle only - no fill */}
-        <Circle
-          cx={circlePosition.x}
-          cy={circlePosition.y}
-          r={radius}
-          color="rgba(255, 255, 255, 0.5)"
-          style="stroke"
-          strokeWidth={2}
-        />
-        {/* Center dot */}
-        <Circle
-          cx={circlePosition.x}
-          cy={circlePosition.y}
-          r={3}
-          color="rgba(255, 255, 255, 0.8)"
-          style="fill"
-        />
-      </Group>
-    );
-  };
-
-  // Apply distortion effect by creating a clipped, transformed overlay
-  const renderDistortedArea = () => {
-    if (!image || Math.abs(intensity) < 0.01) return null;
-    
-    // Create a transform matrix for the distortion
-    const matrix = Skia.Matrix();
-    
-    // Calculate scale factor based on intensity
-    // Positive = bulge (scale up), Negative = pinch (scale down)
-    const scaleFactor = 1 + (intensity * 0.5);
-    
-    // Apply transform centered on the circle position
-    matrix.translate(circlePosition.x, circlePosition.y);
-    matrix.scale(scaleFactor, scaleFactor);
-    matrix.translate(-circlePosition.x, -circlePosition.y);
-    
-    // Create a circular clip path
-    const clipPath = Skia.Path.Make();
-    clipPath.addCircle(circlePosition.x, circlePosition.y, radius);
-    
-    return (
-      <Group clip={clipPath}>
-        <SkiaImage
-          image={image}
-          fit="contain"
-          x={0}
-          y={0}
-          width={width}
-          height={height}
-          matrix={matrix}
-        />
-      </Group>
-    );
-  };
-
   return (
     <View style={styles.container}>
       <View style={styles.canvasContainer} {...panResponder.panHandlers}>
-        <Canvas style={{ width, height }}>
-          {/* Base image - always visible */}
-          {image && (
-            <SkiaImage
-              image={image}
-              fit="contain"
-              x={0}
-              y={0}
-              width={width}
-              height={height}
+        <Surface style={{ width, height }}>
+          <Node
+            shader={shaders.bulge}
+            uniforms={{
+              image: imageUri,
+              center: [circlePosition.x, circlePosition.y],
+              radius: radius,
+              strength: intensity,
+              resolution: [width, height],
+            }}
+          >
+            <GLImage
+              source={{ uri: imageUri }}
+              imageSize={{ width, height }}
+              resizeMode="contain"
             />
-          )}
-          
-          {/* Distorted overlay - only visible when intensity != 0 */}
-          {renderDistortedArea()}
-          
-          {/* Overlay circles */}
-          {renderOverlay()}
-        </Canvas>
+          </Node>
+        </Surface>
+        
+        {/* Overlay circle indicator */}
+        <View
+          style={[
+            styles.circleOverlay,
+            {
+              width: radius * 2,
+              height: radius * 2,
+              borderRadius: radius,
+              left: circlePosition.x - radius,
+              top: circlePosition.y - radius,
+            }
+          ]}
+        />
       </View>
       
       <View style={styles.controls}>
@@ -225,6 +208,12 @@ const styles = StyleSheet.create({
   canvasContainer: {
     flex: 1,
     backgroundColor: '#000000',
+  },
+  circleOverlay: {
+    position: 'absolute',
+    borderWidth: 2,
+    borderColor: 'rgba(255, 255, 255, 0.5)',
+    pointerEvents: 'none',
   },
   controls: {
     backgroundColor: '#1C1C1E',
