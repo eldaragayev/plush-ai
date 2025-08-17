@@ -20,7 +20,8 @@
         "NSPhotoLibraryUsageDescription": "Plush AI needs photo library access to select and save edited photos",
         "NSPhotoLibraryAddUsageDescription": "Plush AI needs permission to save edited photos to your library"
       },
-      "bundleIdentifier": "com.plushai.app"
+      "bundleIdentifier": "com.plushai.app",
+      "appleTeamId": "Z4SFY4R9ZF"
     },
     "android": {
       "adaptiveIcon": {
@@ -29,9 +30,11 @@
       },
       "edgeToEdgeEnabled": true,
       "permissions": [
-        "CAMERA",
-        "READ_EXTERNAL_STORAGE",
-        "WRITE_EXTERNAL_STORAGE"
+        "android.permission.CAMERA",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.ACCESS_MEDIA_LOCATION"
       ],
       "package": "com.plushai.app"
     },
