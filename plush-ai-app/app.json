@@ -43,6 +43,8 @@
     },
     "plugins": [
       "expo-dev-client",
+      "expo-gl",
+      "expo-gl-cpp",
       [
         "react-native-vision-camera",
         {

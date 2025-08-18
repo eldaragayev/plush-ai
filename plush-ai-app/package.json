@@ -19,6 +19,8 @@
     "expo": "~53.0.20",
     "expo-dev-client": "^5.2.4",
     "expo-file-system": "^18.1.11",
+    "expo-gl": "^15.1.7",
+    "expo-gl-cpp": "^11.4.0",
     "expo-haptics": "^14.1.4",
     "expo-image-picker": "^16.1.4",
     "expo-media-library": "^17.1.7",
